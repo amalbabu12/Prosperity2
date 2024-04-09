@@ -6,7 +6,7 @@ import numpy as np
 import operator
 
 class StaticTrader:
-    limits = {'AMETHYSTS': 20, 'STARFTUIR': 20}
+    limits = {'AMETHYSTS': 20, 'STARFRUIT': 20}
 
     def put_order(product, price, vol, order_lst):
         trade_made = 'SELL'
@@ -160,9 +160,48 @@ class MeanReversion:
         last_window = np.array(arr[-self.WINDOW_SIZE - 1: -1])
         return last_window
 
+    # def make_orders(self, state):
+    #     orders = []
+    #     order_depth = state.order_depths[self.product]
+    #     position = state.position.get(self.product, 0)
+    #     best_ask, _ = list(order_depth.sell_orders.items())[0]
+    #     best_bid, _ = list(order_depth.buy_orders.items())[0]
+    #     self.rolling_buys.append(best_ask)
+    #     self.rolling_asks.append(best_bid)
+    #     if len(self.rolling_buys) >= self.WINDOW_SIZE:
+    #         buy_window = self.last_window(self.rolling_buys)
+    #         ask_window = self.last_window(self.rolling_asks)
+    #         price = (buy_window + ask_window).mean()//2
 
-    # - return the list of orders, 
-    def make_orders(self, state):
+    #         next_ask = None
+    #         next_buy = None
+    #         for ask, quantity in list(order_depth.sell_orders.items()):
+    #             next_ask = ask
+    #             if ask < price:
+    #                 position -= quantity
+    #                 orders.append(Order(self.product, ask, -quantity))
+    #             else:
+    #                 break
+    #         for bid, quantity in list(order_depth.buy_orders.items()):
+    #             next_buy = bid
+    #             if bid > price:
+    #                 position -= quantity
+    #                 orders.append(Order(self.product, bid, -quantity))
+    #             else:
+    #                 break
+
+    #         if next_ask and next_ask - 1 > price and position > 0:
+    #             orders.append(Order(self.product, next_ask - 1, -min(position, 20)))
+    #         if next_buy and next_buy + 1 < price and position < 0:
+    #             orders.append(Order(self.product, next_buy + 1, -max(position, 20)))
+    #     return {self.product : orders}
+
+
+    # - return the list of orders, (AMETHYST)
+    # acceptable price - 10000, spread - 2
+    # < 10k for working acceptable bids
+    # > 10k for working acceptable asks
+    def make_am_orders(self, state):
         orders = []
         order_depth = state.order_depths[self.product]
         position = state.position.get(self.product, 0)
@@ -196,9 +235,46 @@ class MeanReversion:
                 orders.append(Order(self.product, next_ask - 1, -min(position, 20)))
             if next_buy and next_buy + 1 < price and position < 0:
                 orders.append(Order(self.product, next_buy + 1, -max(position, 20)))
+        return orders
+    
 
+    # STARFRUIT
+    # acceptable price - , spread -
+    def make_sf_orders(self, state):
+        orders = []
+        order_depth = state.order_depths[self.product]
+        position = state.position.get(self.product, 0)
+        best_ask, _ = list(order_depth.sell_orders.items())[0]
+        best_bid, _ = list(order_depth.buy_orders.items())[0]
+        self.rolling_buys.append(best_ask)
+        self.rolling_asks.append(best_bid)
+        if len(self.rolling_buys) >= self.WINDOW_SIZE:
+            buy_window = self.last_window(self.rolling_buys)
+            ask_window = self.last_window(self.rolling_asks)
+            price = (buy_window + ask_window).mean()//2
 
-        return {self.product: orders}
+            next_ask = None
+            next_buy = None
+            for ask, quantity in list(order_depth.sell_orders.items()):
+                next_ask = ask
+                if ask < price:
+                    position -= quantity
+                    orders.append(Order(self.product, ask, -quantity))
+                else:
+                    break
+            for bid, quantity in list(order_depth.buy_orders.items()):
+                next_buy = bid
+                if bid > price:
+                    position -= quantity
+                    orders.append(Order(self.product, bid, -quantity))
+                else:
+                    break
+
+            if next_ask and next_ask - 1 > price and position > 0:
+                orders.append(Order(self.product, next_ask - 1, -min(position, 20)))
+            if next_buy and next_buy + 1 < price and position < 0:
+                orders.append(Order(self.product, next_buy + 1, -max(position, 20)))
+        return orders
 
             
 
@@ -208,6 +284,7 @@ class Trader:
 
     def __init__(self) -> None:
         self.amTrader = MeanReversion(10, 1, "AMETHYSTS")
+        self.sfTrader = MeanReversion(100, 1, "STARFRUIT")
     
     def run(self, state: TradingState):
         print("traderData: " + state.traderData)
@@ -236,8 +313,9 @@ class Trader:
         #             orders.append(Order(product, best_bid, -best_bid_amount))
             
         #     result[product] = orders
-
-        result = self.amTrader.make_orders(state)
+        result = {}
+        result['AMETHYST'] = self.amTrader.make_am_orders(state)
+        result['STARFRUIT'] = self.sfTrader.make_sf_orders(state)
     
 		    # String value holding Trader state data required. 
 				# It will be delivered as TradingState.traderData on next execution.
@@ -258,9 +336,9 @@ def main():
             product="AMETHYSTS", 
             denomination= "SEASHELLS"
         ),
-        "PEARLS": Listing(
-            symbol="PEARLS", 
-            product="PEARLS", 
+        "STARFRUIT": Listing(
+            symbol="STARFRUIT", 
+            product="STARFRUIT", 
             denomination= "SEASHELLS"
         ),
         "COCONUTS": Listing(
@@ -312,7 +390,7 @@ def main():
 
     order_depths = {
         "AMETHYSTS": od,
-        "PEARLS": od2,	
+        "STARFRUIT": od2,	
         "COCONUTS": od3,
         "PINA_COLADAS": od4,	
         "BERRIES": od3,
@@ -321,7 +399,7 @@ def main():
 
     own_trades = {
         "AMETHYSTS": [],
-        "PEARLS": [],
+        "STARFRUIT": [],
         "COCONUTS": [],
         "PINA_COLADAS": [],
         "BERRIES": [],
@@ -340,12 +418,12 @@ def main():
                 timestamp=900
             )
         ],
-        "PEARLS": []
+        "STARFRUIT": []
     }
 
     position = {
         "AMETHYSTS": 3,
-        "PEARLS": -5,
+        "STARFRUIT": -5,
         "COCONUTS": 3,
         "PINA_COLADAS": -5
     }
