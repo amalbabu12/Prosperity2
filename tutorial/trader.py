@@ -210,31 +210,21 @@ class MeanReversion:
         self.rolling_buys.append(best_ask)
         self.rolling_asks.append(best_bid)
         if len(self.rolling_buys) >= self.WINDOW_SIZE:
-            buy_window = self.last_window(self.rolling_buys)
-            ask_window = self.last_window(self.rolling_asks)
-            price = (buy_window + ask_window).mean()//2
-
-            next_ask = None
-            next_buy = None
+            # buy_window = self.last_window(self.rolling_buys)
+            # ask_window = self.last_window(self.rolling_asks)
+            price = 10000
             for ask, quantity in list(order_depth.sell_orders.items()):
-                next_ask = ask
                 if ask < price:
                     position -= quantity
                     orders.append(Order(self.product, ask, -quantity))
                 else:
                     break
             for bid, quantity in list(order_depth.buy_orders.items()):
-                next_buy = bid
                 if bid > price:
                     position -= quantity
                     orders.append(Order(self.product, bid, -quantity))
                 else:
                     break
-
-            if next_ask and next_ask - 1 > price and position > 0:
-                orders.append(Order(self.product, next_ask - 1, -min(position, 20)))
-            if next_buy and next_buy + 1 < price and position < 0:
-                orders.append(Order(self.product, next_buy + 1, -max(position, 20)))
         return orders
     
 
@@ -251,29 +241,22 @@ class MeanReversion:
         if len(self.rolling_buys) >= self.WINDOW_SIZE:
             buy_window = self.last_window(self.rolling_buys)
             ask_window = self.last_window(self.rolling_asks)
-            price = (buy_window + ask_window).mean()//2
+            price = ((buy_window + ask_window)/2).mean()
+            std = ((buy_window + ask_window)/2).std()
 
-            next_ask = None
-            next_buy = None
+
             for ask, quantity in list(order_depth.sell_orders.items()):
-                next_ask = ask
-                if ask < price:
+                if (ask - price) / std < -self.Z_THRESH:
                     position -= quantity
                     orders.append(Order(self.product, ask, -quantity))
                 else:
                     break
             for bid, quantity in list(order_depth.buy_orders.items()):
-                next_buy = bid
-                if bid > price:
+                if (bid - price) / std > self.Z_THRESH:
                     position -= quantity
                     orders.append(Order(self.product, bid, -quantity))
                 else:
                     break
-
-            if next_ask and next_ask - 1 > price and position > 0:
-                orders.append(Order(self.product, next_ask - 1, -min(position, 20)))
-            if next_buy and next_buy + 1 < price and position < 0:
-                orders.append(Order(self.product, next_buy + 1, -max(position, 20)))
         return orders
 
             
@@ -284,7 +267,7 @@ class Trader:
 
     def __init__(self) -> None:
         self.amTrader = MeanReversion(10, 1, "AMETHYSTS")
-        self.sfTrader = MeanReversion(100, 1, "STARFRUIT")
+        self.sfTrader = MeanReversion(10, 0.5, "STARFRUIT")
     
     def run(self, state: TradingState):
         print("traderData: " + state.traderData)
@@ -314,7 +297,7 @@ class Trader:
             
         #     result[product] = orders
         result = {}
-        result['AMETHYST'] = self.amTrader.make_am_orders(state)
+        result['AMETHYSTS'] = self.amTrader.make_am_orders(state)
         result['STARFRUIT'] = self.sfTrader.make_sf_orders(state)
     
 		    # String value holding Trader state data required. 
