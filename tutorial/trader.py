@@ -4,9 +4,120 @@ import string
 import math
 import numpy as np
 import operator
+import json
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import Any
+
+
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+        self.max_log_length = 3750
+
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
+
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        base_length = len(self.to_json([
+            self.compress_state(state, ""),
+            self.compress_orders(orders),
+            conversions,
+            "",
+            "",
+        ]))
+
+        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
+        max_item_length = (self.max_log_length - base_length) // 3
+
+        print(self.to_json([
+            self.compress_state(state, self.truncate(state.traderData, max_item_length)),
+            self.compress_orders(orders),
+            conversions,
+            self.truncate(trader_data, max_item_length),
+            self.truncate(self.logs, max_item_length),
+        ]))
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+        return [
+            state.timestamp,
+            trader_data,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append([listing["symbol"], listing["product"], listing["denomination"]])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append([
+                    trade.symbol,
+                    trade.price,
+                    trade.quantity,
+                    trade.buyer,
+                    trade.seller,
+                    trade.timestamp,
+                ])
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sunlight,
+                observation.humidity,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+
+    def to_json(self, value: Any) -> str:
+        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
+
+    def truncate(self, value: str, max_length: int) -> str:
+        if len(value) <= max_length:
+            return value
+
+        return value[:max_length - 3] + "..."
+
+logger = Logger()
 
 class StaticTrader:
     limits = {'AMETHYSTS': 20, 'STARFRUIT': 20}
+    order_book = {'AMETHYSTS': {'BUY': [], 'SELL': []}, 'STARFRUIT': {'BUY': [], 'SELL': []}}
+
 
     def put_order(product, price, vol, order_lst):
         trade_made = 'SELL'
@@ -77,7 +188,7 @@ class StaticTrader:
                 # The code below therefore sends a BUY order at the price level of the ask,
                 # with the same quantity
                 # We expect this order to trade with the sell order
-                print(trade_made, str(vol_to_trade) + "x", prices)
+                # print(trade_made, str(vol_to_trade) + "x", prices)
                 if trade_made == "BUY":
                     StaticTrader.put_order(product, prices, vol_to_trade, order_lst)
                     #order_lst.append(Order(product, prices, vol_to_trade))
@@ -120,7 +231,7 @@ class StaticTrader:
             # We expect this order to trade with the sell order
             tradeHappened = True
 
-            print(trade_made, str(vol_to_trade) + "x", prices)
+            # print(trade_made, str(vol_to_trade) + "x", prices)
             if trade_made == "BUY":
                 StaticTrader.put_order(product, prices, vol_to_trade, order_lst)
                 #order_lst.append(Order(product, prices, vol_to_trade))
@@ -204,7 +315,8 @@ class MeanReversion:
     def make_am_orders(self, state):
         orders = []
         order_depth = state.order_depths[self.product]
-        position = state.position.get(self.product, 0)
+        buy_pos = state.position.get(self.product, 0)
+        sell_pos = buy_pos
         best_ask, _ = list(order_depth.sell_orders.items())[0]
         best_bid, _ = list(order_depth.buy_orders.items())[0]
         self.rolling_buys.append(best_ask)
@@ -213,18 +325,39 @@ class MeanReversion:
             # buy_window = self.last_window(self.rolling_buys)
             # ask_window = self.last_window(self.rolling_asks)
             price = 10000
+            next_ask = price + 2
             for ask, quantity in list(order_depth.sell_orders.items()):
-                if ask < price:
-                    position -= quantity
-                    orders.append(Order(self.product, ask, -quantity))
+                q = min(-quantity, 20 - buy_pos)
+                if ask < price and q > 0:
+                    buy_pos += q
+                    orders.append(Order(self.product, ask, q))
                 else:
+                    next_ask= ask
                     break
+            next_bid = price - 2
             for bid, quantity in list(order_depth.buy_orders.items()):
-                if bid > price:
-                    position -= quantity
-                    orders.append(Order(self.product, bid, -quantity))
+                q = max(-quantity, -20 - sell_pos)
+                if bid > price and q < 0:
+                    sell_pos += q
+                    orders.append(Order(self.product, bid, q))
                 else:
+                    next_bid = bid
                     break
+        
+            if sell_pos > -20:
+                offer_price = next_ask - 1 if (next_ask - 1  > price) else price + 1
+                orders.append(Order(self.product, offer_price, -20 - sell_pos))
+            if buy_pos < 20:
+                offer_price = next_bid + 1 if (next_bid + 1  < price) else price - 1
+                orders.append(Order(self.product, 10000 - 1, 20 - buy_pos))
+
+        # if position < 0:
+        #     orders.append(Order(self.product, price - 1, -position))
+        # elif position > 0:
+        #     orders.append(Order(self.product, price + 1, -position))
+
+
+
         return orders
     
 
@@ -233,7 +366,9 @@ class MeanReversion:
     def make_sf_orders(self, state):
         orders = []
         order_depth = state.order_depths[self.product]
-        position = state.position.get(self.product, 0)
+        buy_pos = state.position.get(self.product, 0)
+        sell_pos = buy_pos
+        initial_pos = buy_pos
         best_ask, _ = list(order_depth.sell_orders.items())[0]
         best_bid, _ = list(order_depth.buy_orders.items())[0]
         self.rolling_buys.append(best_ask)
@@ -246,17 +381,30 @@ class MeanReversion:
 
 
             for ask, quantity in list(order_depth.sell_orders.items()):
-                if (ask - price) / std < -self.Z_THRESH:
-                    position -= quantity
-                    orders.append(Order(self.product, ask, -quantity))
+                q = min(-quantity, 20 - buy_pos)
+                if (ask - price) / std < -self.Z_THRESH and q > 0:
+                    buy_pos += q
+                    orders.append(Order(self.product, ask, q))
                 else:
+                    # position += -20 - position
+                    # orders.append(Order(self.product, price + self.Z_THRESH * std, -20 - position))
                     break
             for bid, quantity in list(order_depth.buy_orders.items()):
-                if (bid - price) / std > self.Z_THRESH:
-                    position -= quantity
-                    orders.append(Order(self.product, bid, -quantity))
+                q = max(-quantity, -20 - sell_pos)
+                if (bid - price) / std > self.Z_THRESH and q  <  0:
+                    sell_pos += q
+                    orders.append(Order(self.product, bid, q))
                 else:
                     break
+            
+            if 0 > sell_pos > -20:
+                orders.append(Order(self.product, int(min(ask_window)), 0 - sell_pos))
+            elif 0 < buy_pos < 20:
+                orders.append(Order(self.product, int(max(buy_window)), 0 - buy_pos))
+
+            # StaticTrader.marketmake(product=self.product, tradeMade="BUY", acceptablePrice=(best_ask + best_bid) / 2, volume=20, orderList=orders)
+
+            # StaticTrader.marketmake(product=self.product, tradeMade="SELL", acceptablePrice=(best_ask + best_bid) / 2, volume=20, orderList=orders)
         return orders
 
             
@@ -266,8 +414,8 @@ class MeanReversion:
 class Trader:
 
     def __init__(self) -> None:
-        self.amTrader = MeanReversion(10, 1, "AMETHYSTS")
-        self.sfTrader = MeanReversion(10, 0.5, "STARFRUIT")
+        self.amTrader = MeanReversion(10, 0, "AMETHYSTS")
+        self.sfTrader = MeanReversion(10, 0.3, "STARFRUIT")
     
     def run(self, state: TradingState):
         print("traderData: " + state.traderData)
@@ -306,6 +454,7 @@ class Trader:
         
 				# Sample conversion request. Check more details below. 
         conversions = 1
+        # logger.flush(state, result, conversions, traderData)
         return result, conversions, traderData
 
 
