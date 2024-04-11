@@ -271,7 +271,7 @@ class MeanReversion:
         last_window = np.array(arr[-self.WINDOW_SIZE - 1: -1])
         return last_window
 
-    def match_orders(self, fair_bid, fair_ask, order_depth, pos):
+    def take_orders(self, fair_bid, fair_ask, order_depth, pos):
         orders = []
         buy_pos = pos
         sell_pos = pos
@@ -311,15 +311,15 @@ class MeanReversion:
             # buy_window = self.last_window(self.rolling_buys)
             # ask_window = self.last_window(self.rolling_asks)
             price = 10000
-            orders, remaining_bids, remaining_asks, buy_pos, sell_pos = self.match_orders(price, price, order_depth, state.position.get(self.product, 0))
+            orders, remaining_bids, remaining_asks, buy_pos, sell_pos = self.take_orders(price, price, order_depth, state.position.get(self.product, 0))
             next_bid = remaining_bids[-1][0] if remaining_bids else price - 2
             next_ask = remaining_asks[-1][0] if remaining_asks else price + 2
         
             if sell_pos > -20:
-                offer_price = next_ask - 1 if (next_ask - 1  > price) else price + 1
+                offer_price = next_ask - 1 if next_ask and next_ask - 1  > price else (price + 1 if next_ask else price + 2)
                 orders.append(Order(self.product, offer_price, -20 - sell_pos))
             if buy_pos < 20:
-                offer_price = next_bid + 1 if (next_bid + 1  < price) else price - 1
+                offer_price = next_bid + 1 if next_bid and next_bid + 1  < price else (price - 1 if next_bid else next_bid - 2)
                 orders.append(Order(self.product, 10000 - 1, 20 - buy_pos))
 
         # if position < 0:
@@ -327,9 +327,14 @@ class MeanReversion:
         # elif position > 0:
         #     orders.append(Order(self.product, price + 1, -position))
 
-
-
+        # logging = {
+        #     'bid_price': best_bid,
+        #     'ask_price': best_ask,
+        #     'orders' : orders
+        # }
+        # print(json.dumps(logging))
         return orders
+    
     
 
     # STARFRUIT
@@ -339,8 +344,6 @@ class MeanReversion:
         order_depth = state.order_depths[self.product]
         best_ask, _ = list(order_depth.sell_orders.items())[0]
         best_bid, _ = list(order_depth.buy_orders.items())[0]
-        self.rolling_buys.append(best_ask)
-        self.rolling_asks.append(best_bid)
         if len(self.rolling_buys) >= self.WINDOW_SIZE:
             buy_window = self.last_window(self.rolling_buys)
             ask_window = self.last_window(self.rolling_asks)
@@ -348,16 +351,22 @@ class MeanReversion:
             std = ((buy_window + ask_window)/2).std()
             acceptable_ask = price + self.Z_THRESH * std
             acceptable_bid = price - self.Z_THRESH * std
-            orders, remaining_bids, remaining_asks, buy_pos, sell_pos = self.match_orders(acceptable_bid, acceptable_ask, order_depth, state.position.get(self.product, 0))
+            orders, remaining_bids, remaining_asks, buy_pos, sell_pos = self.take_orders(acceptable_bid, acceptable_ask, order_depth, state.position.get(self.product, 0))
             
             if 0 > sell_pos > -20:
                 orders.append(Order(self.product, int(min(ask_window)), 0 - sell_pos))
             elif 0 < buy_pos < 20:
                 orders.append(Order(self.product, int(max(buy_window)), 0 - buy_pos))
 
-            # StaticTrader.marketmake(product=self.product, tradeMade="BUY", acceptablePrice=(best_ask + best_bid) / 2, volume=20, orderList=orders)
+        self.rolling_buys.append(best_ask)
+        self.rolling_asks.append(best_bid)
 
-            # StaticTrader.marketmake(product=self.product, tradeMade="SELL", acceptablePrice=(best_ask + best_bid) / 2, volume=20, orderList=orders)
+        # logging = {
+        #     'bid_price': best_bid,
+        #     'ask_price': best_ask,
+        #     'orders' : orders
+        # }
+        # print(json.dumps(logging))
         return orders
 
             
@@ -369,11 +378,12 @@ class Trader:
     def __init__(self) -> None:
         self.amTrader = MeanReversion(10, 0, "AMETHYSTS")
         self.sfTrader = MeanReversion(5, 0.3, "STARFRUIT")
+        self.logging = {}
     
     def run(self, state: TradingState):
-        print("traderData: " + state.traderData)
-        print("Observations: " + str(state.observations))
-        print(state)
+        # print("traderData: " + state.traderData)
+        # print("Observations: " + str(state.observations))
+        # print(state)
 
 				# Orders to be placed on exchange matching engine
         # result = {}
@@ -400,6 +410,17 @@ class Trader:
         result = {}
         result['AMETHYSTS'] = self.amTrader.make_am_orders(state)
         result['STARFRUIT'] = self.sfTrader.make_sf_orders(state)
+
+
+        logging = {}
+
+        logging['AMETHYSTS'] = result['AMETHYSTS']
+        logging['STARFRUIT'] = result['STARFRUIT']
+
+
+
+        print(f'TIMESTEP: {state.timestamp}')
+        print(logging)
     
 		    # String value holding Trader state data required. 
 				# It will be delivered as TradingState.traderData on next execution.
@@ -407,7 +428,7 @@ class Trader:
         
 				# Sample conversion request. Check more details below. 
         conversions = 1
-        # logger.flush(state, result, conversions, traderData)
+        logger.flush(state, result, conversions, traderData)
         return result, conversions, traderData
 
 
